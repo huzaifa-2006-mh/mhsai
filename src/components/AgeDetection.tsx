@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Webcam from 'react-webcam';
-import { ShieldCheck, History, Clock, Activity, Loader2 } from 'lucide-react';
+import { ShieldCheck, History, Clock, Activity, Loader2, AlertCircle } from 'lucide-react';
 
 const MODEL_URL = 'https://vladmandic.github.io/face-api/model/';
 
@@ -11,21 +11,27 @@ export default function AgeDetection() {
   const [result, setResult] = useState<{age: number, gender: string, confidence: number} | null>(null);
   const [logs, setLogs] = useState<{timestamp: number, value: string}[]>([]);
   const [isModelsLoaded, setIsModelsLoaded] = useState(false);
+  const [status, setStatus] = useState<string>("Initializing...");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const loadModels = async () => {
       try {
+        setStatus("Loading Neural Models...");
         const faceapi = await import('@vladmandic/face-api');
-        console.log("Loading models...");
+        
         await Promise.all([
           faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
           faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
           faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL),
         ]);
+        
         setIsModelsLoaded(true);
-        console.log("Models loaded successfully");
-      } catch (error) {
-        console.error("Error loading models:", error);
+        setStatus("System Ready");
+      } catch (err: any) {
+        console.error("Error loading models:", err);
+        setError("Failed to load AI models. Please check your internet connection.");
+        setStatus("Error");
       }
     };
     loadModels();
@@ -45,6 +51,7 @@ export default function AgeDetection() {
               .withAgeAndGender();
 
             if (detections) {
+              setStatus("Face Detected");
               const roundedAge = Math.round(detections.age);
               setResult({
                 age: roundedAge,
@@ -55,11 +62,15 @@ export default function AgeDetection() {
               if (logs.length === 0 || Math.abs(logs[0].timestamp - Date.now()) > 3000) {
                  setLogs(prev => [{timestamp: Date.now(), value: `Detected ${detections.gender} (~${roundedAge}y)`}, ...prev].slice(0, 10));
               }
+            } else {
+              setStatus("Scanning for face...");
             }
+          } else {
+            setStatus("Waiting for camera...");
           }
         }
-      } catch (error) {
-        console.error("Age detection error:", error);
+      } catch (err: any) {
+        console.error("Age detection error:", err);
       }
     }, 500);
 
@@ -77,10 +88,11 @@ export default function AgeDetection() {
           mirrored={true}
         />
         <div className="camera-overlay"></div>
-        {!isModelsLoaded && (
-          <div className="camera-placeholder" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.8)', zIndex: 10 }}>
-            <Loader2 className="pulse" size={48} />
-            <p style={{ marginTop: '1rem' }}>Loading Neural Models...</p>
+        
+        {(!isModelsLoaded || error) && (
+          <div className="camera-placeholder" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.8)', zIndex: 10, padding: '2rem', textAlign: 'center' }}>
+            {error ? <AlertCircle size={48} color="var(--accent)" /> : <Loader2 className="pulse" size={48} />}
+            <p style={{ marginTop: '1rem' }}>{error || status}</p>
           </div>
         )}
       </div>
@@ -89,11 +101,11 @@ export default function AgeDetection() {
         <div className="glass stat-card main-stat">
           <div className="stat-header">
             <ShieldCheck size={18} color="var(--secondary)" /> 
-            <span>Detection Result</span>
+            <span>System Status: <span style={{color: error ? 'var(--accent)' : 'var(--secondary)'}}>{status}</span></span>
           </div>
           <div className="stat-content">
             <div className="stat-val">
-              {result?.age ? `${result.age}` : isModelsLoaded ? 'Scanning' : '--'} 
+              {result?.age ? `${result.age}` : isModelsLoaded ? '--' : '--'} 
               {result?.age && <span style={{ fontSize: '1rem', color: 'var(--text-dim)', marginLeft: '10px' }}>Years</span>}
             </div>
             <div className="confidence-bar">

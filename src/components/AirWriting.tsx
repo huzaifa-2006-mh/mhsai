@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Webcam from 'react-webcam';
-import { RefreshCw, ShieldCheck, History, Clock, Activity } from 'lucide-react';
+import { RefreshCw, ShieldCheck, History, Clock, Activity, Loader2, AlertCircle } from 'lucide-react';
 
 export default function AirWriting() {
   const webcamRef = useRef<Webcam>(null);
@@ -11,16 +11,25 @@ export default function AirWriting() {
   const [logs, setLogs] = useState<{timestamp: number, value: string}[]>([]);
   const pointsRef = useRef<{x: number, y: number}[]>([]);
   const handsRef = useRef<any>(null);
+  const [status, setStatus] = useState<string>("Initializing...");
+  const [error, setError] = useState<string | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
     let hands: any;
     
     const initHands = async () => {
       try {
+        setStatus("Loading Hand Tracker...");
         // @ts-ignore
         const mpHands = await import('@mediapipe/hands');
-        hands = new mpHands.Hands({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        
+        // Handle different build formats
+        const HandsClass = mpHands.Hands || (mpHands.default && mpHands.default.Hands);
+        if (!HandsClass) throw new Error("MediaPipe Hands class not found");
+
+        hands = new HandsClass({
+          locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
         });
 
         hands.setOptions({
@@ -32,23 +41,28 @@ export default function AirWriting() {
 
         hands.onResults(onResults);
         handsRef.current = hands;
+        setIsLoaded(true);
+        setStatus("System Ready");
         console.log(">>> MediaPipe Hands initialized");
 
         const interval = setInterval(() => {
           if (webcamRef.current && webcamRef.current.video && handsRef.current) {
             const video = webcamRef.current.video;
-            if (video.readyState >= 2) { // HAVE_CURRENT_DATA
-              handsRef.current.send({ image: video }).catch(err => console.error("MediaPipe Error:", err));
+            if (video.readyState >= 2) {
+              handsRef.current.send({ image: video }).catch((err: any) => console.error("MediaPipe Error:", err));
+            } else {
+              setStatus("Waiting for camera...");
             }
           }
         }, 100);
 
         return interval;
-      } catch (error) {
-        console.error("Failed to init MediaPipe:", error);
+      } catch (err: any) {
+        console.error("Failed to init MediaPipe:", err);
+        setError("Failed to load Hand Tracker. Please refresh.");
+        setStatus("Error");
       }
     };
-
 
     let intervalId: any;
     initHands().then(id => intervalId = id);
@@ -71,8 +85,8 @@ export default function AirWriting() {
     // Clear main canvas
     canvasCtx.clearRect(0, 0, width, height);
     
-    // Draw drawing on offscreen canvas
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+      setStatus("Tracking Hand");
       const landmarks = results.multiHandLandmarks[0];
       const indexTip = landmarks[8];
       const indexDip = landmarks[6];
@@ -81,20 +95,19 @@ export default function AirWriting() {
       const y = indexTip.y * height;
 
       if (indexTip.y < indexDip.y) {
-        // Finger is extended - Drawing
         pointsRef.current.push({ x, y });
-        if (pointsRef.current.length === 1) {
+        if (pointsRef.current.length === 1 || (pointsRef.current.length > 1 && pointsRef.current[pointsRef.current.length-2].x === -1)) {
           setLogs(prev => [{timestamp: Date.now(), value: "Started Writing"}, ...prev].slice(0, 10));
         }
       } else {
-        // Finger is down - Breaking line
         pointsRef.current.push({ x: -1, y: -1 });
       }
     } else {
+      setStatus("Scanning for hand...");
       pointsRef.current.push({ x: -1, y: -1 });
     }
 
-    // Draw lines on offscreen canvas
+    // Draw on offscreen canvas
     offscreenCtx.strokeStyle = '#00f2fe';
     offscreenCtx.lineWidth = 8;
     offscreenCtx.lineCap = 'round';
@@ -114,17 +127,22 @@ export default function AirWriting() {
     // Copy offscreen to main
     canvasCtx.drawImage(offscreenCanvasRef.current, 0, 0);
     
-    // Optional: Draw landmarks for feedback
+    // Draw landmarks
     if (results.multiHandLandmarks) {
-      const drawingUtils = await import('@mediapipe/drawing_utils');
-      const mpHands = await import('@mediapipe/hands');
-      for (const landmarks of results.multiHandLandmarks) {
-        drawingUtils.drawConnectors(canvasCtx, landmarks, mpHands.HAND_CONNECTIONS, {color: '#7d33ff', lineWidth: 2});
-        drawingUtils.drawLandmarks(canvasCtx, landmarks, {color: '#00f2fe', lineWidth: 1, radius: 2});
-      }
+      try {
+        const drawingUtils = await import('@mediapipe/drawing_utils');
+        const mpHands = await import('@mediapipe/hands');
+        const connections = mpHands.HAND_CONNECTIONS || (mpHands.default && mpHands.default.HAND_CONNECTIONS);
+        
+        for (const landmarks of results.multiHandLandmarks) {
+          if (drawingUtils && connections) {
+            drawingUtils.drawConnectors(canvasCtx, landmarks, connections, {color: '#7d33ff', lineWidth: 2});
+            drawingUtils.drawLandmarks(canvasCtx, landmarks, {color: '#00f2fe', lineWidth: 1, radius: 2});
+          }
+        }
+      } catch (e) {}
     }
   };
-
 
   const resetCanvas = () => {
     if (offscreenCanvasRef.current) {
@@ -158,13 +176,20 @@ export default function AirWriting() {
           height={720}
         />
         <div className="camera-overlay"></div>
+        
+        {(!isLoaded || error) && (
+          <div className="camera-placeholder" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.8)', zIndex: 10, padding: '2rem', textAlign: 'center' }}>
+            {error ? <AlertCircle size={48} color="var(--accent)" /> : <Loader2 className="pulse" size={48} />}
+            <p style={{ marginTop: '1rem' }}>{error || status}</p>
+          </div>
+        )}
       </div>
 
       <div className="analysis-panel">
         <div className="glass stat-card main-stat">
           <div className="stat-header">
             <ShieldCheck size={18} color="var(--secondary)" /> 
-            <span>Recognition Status</span>
+            <span>System Status: <span style={{color: error ? 'var(--accent)' : 'var(--secondary)'}}>{status}</span></span>
           </div>
           <div className="stat-content">
             <button onClick={resetCanvas} className="btn btn-primary w-full">
@@ -191,9 +216,9 @@ export default function AirWriting() {
                 <div className="log-val">{log.value}</div>
               </div>
             )) : (
-              <div className="no-logs">
+              <div className="no-logs" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-dim)' }}>
                 <Activity size={24} className="pulse" />
-                <p>Waiting for gestures...</p>
+                <p style={{ marginTop: '1rem' }}>Waiting for gestures...</p>
               </div>
             )}
           </div>
