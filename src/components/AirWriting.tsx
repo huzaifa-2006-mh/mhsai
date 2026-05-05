@@ -1,20 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
 import { RefreshCw, ShieldCheck, History, Clock, Activity, Loader2, AlertCircle } from 'lucide-react';
 
 export default function AirWriting() {
   const webcamRef = useRef<Webcam>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const offscreenCanvasRef = useRef<HTMLCanvasElement>(null);
+  const inkCanvasRef = useRef<HTMLCanvasElement>(null);
   const [logs, setLogs] = useState<{timestamp: number, value: string}[]>([]);
-  const pointsRef = useRef<{x: number, y: number}[]>([]);
+  const lastPointRef = useRef<{x: number, y: number} | null>(null);
   const handsRef = useRef<any>(null);
+  const requestRef = useRef<number>();
   const [status, setStatus] = useState<string>("Initializing...");
   const [error, setError] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
+  // Initialize MediaPipe Hands
   useEffect(() => {
     let hands: any;
     
@@ -24,7 +26,6 @@ export default function AirWriting() {
         // @ts-ignore
         const mpHands = await import('@mediapipe/hands');
         
-        // Handle different build formats
         const HandsClass = mpHands.Hands || (mpHands.default && mpHands.default.Hands);
         if (!HandsClass) throw new Error("MediaPipe Hands class not found");
 
@@ -36,27 +37,16 @@ export default function AirWriting() {
           maxNumHands: 1,
           modelComplexity: 1,
           minDetectionConfidence: 0.7,
-          minTrackingConfidence: 0.5
+          minTrackingConfidence: 0.7
         });
 
         hands.onResults(onResults);
         handsRef.current = hands;
         setIsLoaded(true);
         setStatus("System Ready");
-        console.log(">>> MediaPipe Hands initialized");
-
-        const interval = setInterval(() => {
-          if (webcamRef.current && webcamRef.current.video && handsRef.current) {
-            const video = webcamRef.current.video;
-            if (video.readyState >= 2) {
-              handsRef.current.send({ image: video }).catch((err: any) => console.error("MediaPipe Error:", err));
-            } else {
-              setStatus("Waiting for camera...");
-            }
-          }
-        }, 100);
-
-        return interval;
+        
+        // Start the loop
+        requestRef.current = requestAnimationFrame(detectionLoop);
       } catch (err: any) {
         console.error("Failed to init MediaPipe:", err);
         setError("Failed to load Hand Tracker. Please refresh.");
@@ -64,92 +54,127 @@ export default function AirWriting() {
       }
     };
 
-    let intervalId: any;
-    initHands().then(id => intervalId = id);
+    initHands();
 
     return () => {
-      if (intervalId) clearInterval(intervalId);
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
       if (hands) hands.close();
     };
   }, []);
 
-  const onResults = async (results: any) => {
-    if (!canvasRef.current || !offscreenCanvasRef.current) return;
-    const canvasCtx = canvasRef.current.getContext('2d');
-    const offscreenCtx = offscreenCanvasRef.current.getContext('2d');
-    if (!canvasCtx || !offscreenCtx) return;
+  const detectionLoop = useCallback(async () => {
+    if (webcamRef.current && webcamRef.current.video && handsRef.current) {
+      const video = webcamRef.current.video;
+      if (video.readyState >= 2) {
+        try {
+          await handsRef.current.send({ image: video });
+        } catch (err) {
+          console.error("MediaPipe Send Error:", err);
+        }
+      }
+    }
+    requestRef.current = requestAnimationFrame(detectionLoop);
+  }, []);
 
-    const width = canvasRef.current.width;
-    const height = canvasRef.current.height;
-
-    // Clear main canvas
-    canvasCtx.clearRect(0, 0, width, height);
+  const onResults = useCallback(async (results: any) => {
+    if (!canvasRef.current || !inkCanvasRef.current || !webcamRef.current?.video) return;
     
+    const video = webcamRef.current.video;
+    const canvas = canvasRef.current;
+    const inkCanvas = inkCanvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const inkCtx = inkCanvas.getContext('2d');
+    
+    if (!ctx || !inkCtx) return;
+
+    // Sync dimensions
+    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      inkCanvas.width = video.videoWidth;
+      inkCanvas.height = video.videoHeight;
+      // Re-setup ink styles
+      inkCtx.strokeStyle = '#00f2fe';
+      inkCtx.lineWidth = 10;
+      inkCtx.lineCap = 'round';
+      inkCtx.lineJoin = 'round';
+      inkCtx.shadowBlur = 15;
+      inkCtx.shadowColor = 'rgba(0, 242, 254, 0.8)';
+    }
+
+    // Clear main display canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw persistent ink
+    ctx.drawImage(inkCanvas, 0, 0);
+
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
       setStatus("Tracking Hand");
       const landmarks = results.multiHandLandmarks[0];
+      
+      // Index finger tip (8) and index finger base (5)
       const indexTip = landmarks[8];
-      const indexDip = landmarks[6];
+      const indexDip = landmarks[7];
+      const middleTip = landmarks[12];
+      
+      // Coordinate mapping (with mirroring)
+      const x = (1 - indexTip.x) * canvas.width;
+      const y = indexTip.y * canvas.height;
 
-      const x = (1 - indexTip.x) * width; // Mirrored
-      const y = indexTip.y * height;
+      // Gesture Logic: Index finger extended AND higher than other fingers
+      // Simpler check: index tip is significantly above index dip
+      const isWriting = indexTip.y < indexDip.y && indexTip.y < middleTip.y;
 
-      if (indexTip.y < indexDip.y) {
-        pointsRef.current.push({ x, y });
-        if (pointsRef.current.length === 1 || (pointsRef.current.length > 1 && pointsRef.current[pointsRef.current.length-2].x === -1)) {
+      if (isWriting) {
+        if (!lastPointRef.current) {
           setLogs(prev => [{timestamp: Date.now(), value: "Started Writing"}, ...prev].slice(0, 10));
+        } else {
+          // Draw line segment on persistent ink canvas
+          inkCtx.beginPath();
+          inkCtx.moveTo(lastPointRef.current.x, lastPointRef.current.y);
+          inkCtx.lineTo(x, y);
+          inkCtx.stroke();
         }
+        lastPointRef.current = { x, y };
+
+        // Draw "pen" cursor
+        ctx.beginPath();
+        ctx.arc(x, y, 6, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.strokeStyle = '#00f2fe';
+        ctx.lineWidth = 2;
+        ctx.stroke();
       } else {
-        pointsRef.current.push({ x: -1, y: -1 });
+        if (lastPointRef.current) {
+           setLogs(prev => [{timestamp: Date.now(), value: "Writing Paused"}, ...prev].slice(0, 10));
+        }
+        lastPointRef.current = null;
       }
-    } else {
-      setStatus("Scanning for hand...");
-      pointsRef.current.push({ x: -1, y: -1 });
-    }
 
-    // Draw on offscreen canvas
-    offscreenCtx.strokeStyle = '#00f2fe';
-    offscreenCtx.lineWidth = 8;
-    offscreenCtx.lineCap = 'round';
-    offscreenCtx.lineJoin = 'round';
-
-    for (let i = 1; i < pointsRef.current.length; i++) {
-      const p1 = pointsRef.current[i - 1];
-      const p2 = pointsRef.current[i];
-      if (p1.x !== -1 && p2.x !== -1) {
-        offscreenCtx.beginPath();
-        offscreenCtx.moveTo(p1.x, p1.y);
-        offscreenCtx.lineTo(p2.x, p2.y);
-        offscreenCtx.stroke();
-      }
-    }
-
-    // Copy offscreen to main
-    canvasCtx.drawImage(offscreenCanvasRef.current, 0, 0);
-    
-    // Draw landmarks
-    if (results.multiHandLandmarks) {
+      // Draw hand skeleton (optional but good for user confidence)
       try {
         const drawingUtils = await import('@mediapipe/drawing_utils');
         const mpHands = await import('@mediapipe/hands');
         const connections = mpHands.HAND_CONNECTIONS || (mpHands.default && mpHands.default.HAND_CONNECTIONS);
         
-        for (const landmarks of results.multiHandLandmarks) {
-          if (drawingUtils && connections) {
-            drawingUtils.drawConnectors(canvasCtx, landmarks, connections, {color: '#7d33ff', lineWidth: 2});
-            drawingUtils.drawLandmarks(canvasCtx, landmarks, {color: '#00f2fe', lineWidth: 1, radius: 2});
-          }
+        if (drawingUtils && connections) {
+          drawingUtils.drawConnectors(ctx, landmarks, connections, {color: 'rgba(125, 51, 255, 0.4)', lineWidth: 2});
+          drawingUtils.drawLandmarks(ctx, landmarks, {color: '#00f2fe', lineWidth: 1, radius: 2});
         }
       } catch (e) {}
+    } else {
+      setStatus("Scanning for hand...");
+      lastPointRef.current = null;
     }
-  };
+  }, []);
 
   const resetCanvas = () => {
-    if (offscreenCanvasRef.current) {
-      const ctx = offscreenCanvasRef.current.getContext('2d');
-      ctx?.clearRect(0, 0, offscreenCanvasRef.current.width, offscreenCanvasRef.current.height);
+    if (inkCanvasRef.current) {
+      const ctx = inkCanvasRef.current.getContext('2d');
+      ctx?.clearRect(0, 0, inkCanvasRef.current.width, inkCanvasRef.current.height);
     }
-    pointsRef.current = [];
+    lastPointRef.current = null;
     setLogs(prev => [{timestamp: Date.now(), value: "Canvas Cleared"}, ...prev].slice(0, 10));
   };
 
@@ -159,21 +184,21 @@ export default function AirWriting() {
         <div className="badge-live">Live Feed</div>
         <Webcam
           ref={webcamRef}
-          screenshotFormat="image/jpeg"
           className="camera-feed"
           mirrored={true}
+          videoConstraints={{
+            width: 1280,
+            height: 720,
+            facingMode: "user"
+          }}
         />
         <canvas 
           ref={canvasRef} 
           className="camera-canvas"
-          width={1280}
-          height={720}
         />
         <canvas 
-          ref={offscreenCanvasRef} 
+          ref={inkCanvasRef} 
           style={{display: 'none'}}
-          width={1280}
-          height={720}
         />
         <div className="camera-overlay"></div>
         
@@ -196,7 +221,12 @@ export default function AirWriting() {
               <RefreshCw size={20} /> Clear Canvas
             </button>
             <div className="hint-box" style={{ marginTop: '1.5rem', fontSize: '0.9rem', color: 'var(--text-dim)', lineHeight: '1.4' }}>
-              <strong>Tip:</strong> Raise your index finger and keep it extended to start writing. Fold it to stop.
+              <p><strong>How to write:</strong></p>
+              <ul style={{ paddingLeft: '1.2rem', marginTop: '0.5rem' }}>
+                <li>Point your <strong>index finger</strong> up to draw.</li>
+                <li>Fold your finger or show your palm to stop.</li>
+                <li>Move slowly for best results.</li>
+              </ul>
             </div>
           </div>
         </div>

@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import Webcam from 'react-webcam';
 import { ShieldCheck, History, Clock, Activity, Loader2, AlertCircle } from 'lucide-react';
 
 const MODEL_URL = 'https://vladmandic.github.io/face-api/model/';
+
+// Smoothing configuration
+const BUFFER_SIZE = 15; // Number of frames to average
 
 export default function AgeDetection() {
   const webcamRef = useRef<Webcam>(null);
@@ -13,21 +16,25 @@ export default function AgeDetection() {
   const [isModelsLoaded, setIsModelsLoaded] = useState(false);
   const [status, setStatus] = useState<string>("Initializing...");
   const [error, setError] = useState<string | null>(null);
+  
+  // Buffers for smoothing
+  const ageBufferRef = useRef<number[]>([]);
+  const genderBufferRef = useRef<string[]>([]);
 
   useEffect(() => {
     const loadModels = async () => {
       try {
-        setStatus("Loading Neural Models...");
+        setStatus("Loading High-Accuracy Models...");
         const faceapi = await import('@vladmandic/face-api');
         
         await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+          faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
           faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
           faceapi.nets.ageGenderNet.loadFromUri(MODEL_URL),
         ]);
         
         setIsModelsLoaded(true);
-        setStatus("System Ready");
+        setStatus("AI System Online");
       } catch (err: any) {
         console.error("Error loading models:", err);
         setError("Failed to load AI models. Please check your internet connection.");
@@ -36,6 +43,23 @@ export default function AgeDetection() {
     };
     loadModels();
   }, []);
+
+  const getSmoothedAge = (newAge: number) => {
+    ageBufferRef.current.push(newAge);
+    if (ageBufferRef.current.length > BUFFER_SIZE) ageBufferRef.current.shift();
+    const sum = ageBufferRef.current.reduce((a, b) => a + b, 0);
+    return Math.round(sum / ageBufferRef.current.length);
+  };
+
+  const getSmoothedGender = (newGender: string) => {
+    genderBufferRef.current.push(newGender);
+    if (genderBufferRef.current.length > BUFFER_SIZE) genderBufferRef.current.shift();
+    
+    const counts: Record<string, number> = {};
+    genderBufferRef.current.forEach(g => counts[g] = (counts[g] || 0) + 1);
+    
+    return Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b);
+  };
 
   useEffect(() => {
     if (!isModelsLoaded) return;
@@ -46,24 +70,34 @@ export default function AgeDetection() {
           const video = webcamRef.current.video;
           if (video.readyState >= 2) {
             const faceapi = await import('@vladmandic/face-api');
-            const detections = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+            // Using SsdMobilenetv1 for much better accuracy than TinyFaceDetector
+            const detections = await faceapi.detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
               .withFaceLandmarks()
               .withAgeAndGender();
 
             if (detections) {
-              setStatus("Face Detected");
-              const roundedAge = Math.round(detections.age);
+              setStatus("Face Locked");
+              
+              const smoothedAge = getSmoothedAge(detections.age);
+              const smoothedGender = getSmoothedGender(detections.gender);
+              
               setResult({
-                age: roundedAge,
-                gender: detections.gender,
+                age: smoothedAge,
+                gender: smoothedGender,
                 confidence: detections.detection.score
               });
               
-              if (logs.length === 0 || Math.abs(logs[0].timestamp - Date.now()) > 3000) {
-                 setLogs(prev => [{timestamp: Date.now(), value: `Detected ${detections.gender} (~${roundedAge}y)`}, ...prev].slice(0, 10));
+              // Only log if it's a "significant" update or first time
+              const logMsg = `Detected ${smoothedGender} (~${smoothedAge}y)`;
+              if (logs.length === 0 || logs[0].value !== logMsg) {
+                 // Throttle logging to every 5 seconds for the same result
+                 if (logs.length === 0 || Math.abs(logs[0].timestamp - Date.now()) > 5000) {
+                    setLogs(prev => [{timestamp: Date.now(), value: logMsg}, ...prev].slice(0, 10));
+                 }
               }
             } else {
               setStatus("Scanning for face...");
+              // Clear buffers if no face for a while? Maybe not to keep stability
             }
           } else {
             setStatus("Waiting for camera...");
@@ -72,10 +106,10 @@ export default function AgeDetection() {
       } catch (err: any) {
         console.error("Age detection error:", err);
       }
-    }, 500);
+    }, 300); // Slightly faster interval but smoothed
 
     return () => clearInterval(interval);
-  }, [isModelsLoaded, logs.length]);
+  }, [isModelsLoaded, logs]);
 
   return (
     <div className="camera-view">
@@ -112,12 +146,15 @@ export default function AgeDetection() {
               <div className="confidence-fill" style={{ width: result?.confidence ? `${result.confidence * 100}%` : '0%' }}></div>
             </div>
             <p className="stat-desc" style={{ fontSize: '0.85rem', color: 'var(--text-dim)' }}>
-              AI Confidence: {result?.confidence ? `${(result.confidence * 100).toFixed(1)}%` : isModelsLoaded ? 'Calibrating...' : 'Offline'}
+              AI Accuracy: {result?.confidence ? `${(result.confidence * 100).toFixed(1)}%` : isModelsLoaded ? 'Calibrating...' : 'Offline'}
             </p>
             {result?.gender && (
-              <p style={{ marginTop: '1rem', color: 'var(--secondary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>
-                Gender: {result.gender}
-              </p>
+              <div style={{ marginTop: '1.5rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ color: 'var(--text-dim)', fontSize: '0.9rem' }}>Gender:</span>
+                <span style={{ color: 'var(--secondary)', fontWeight: 800, textTransform: 'uppercase', fontSize: '1.2rem', letterSpacing: '2px' }}>
+                  {result.gender}
+                </span>
+              </div>
             )}
           </div>
         </div>
