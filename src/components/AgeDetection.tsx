@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Webcam from 'react-webcam';
-import * as faceapi from '@vladmandic/face-api';
 import { ShieldCheck, History, Clock, Activity, Loader2 } from 'lucide-react';
 
 const MODEL_URL = 'https://vladmandic.github.io/face-api/model/';
@@ -16,6 +15,7 @@ export default function AgeDetection() {
   useEffect(() => {
     const loadModels = async () => {
       try {
+        const faceapi = await import('@vladmandic/face-api');
         console.log("Loading models...");
         await Promise.all([
           faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
@@ -37,6 +37,7 @@ export default function AgeDetection() {
     const interval = setInterval(async () => {
       if (webcamRef.current && webcamRef.current.video) {
         const video = webcamRef.current.video;
+        const faceapi = await import('@vladmandic/face-api');
         const detections = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
           .withFaceLandmarks()
           .withAgeAndGender();

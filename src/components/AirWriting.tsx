@@ -2,8 +2,6 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Webcam from 'react-webcam';
-import { Hands, Results } from '@mediapipe/hands';
-import * as drawingUtils from '@mediapipe/drawing_utils';
 import { RefreshCw, ShieldCheck, History, Clock, Activity } from 'lucide-react';
 
 export default function AirWriting() {
@@ -12,38 +10,49 @@ export default function AirWriting() {
   const offscreenCanvasRef = useRef<HTMLCanvasElement>(null);
   const [logs, setLogs] = useState<{timestamp: number, value: string}[]>([]);
   const pointsRef = useRef<{x: number, y: number}[]>([]);
-  const handsRef = useRef<Hands | null>(null);
+  const handsRef = useRef<any>(null);
 
   useEffect(() => {
-    const hands = new Hands({
-      locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-      }
-    });
+    let hands: any;
+    
+    const initHands = async () => {
+      // @ts-ignore
+      const mpHands = await import('@mediapipe/hands');
+      hands = new mpHands.Hands({
+        locateFile: (file) => {
+          return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }
+      });
 
-    hands.setOptions({
-      maxNumHands: 1,
-      modelComplexity: 1,
-      minDetectionConfidence: 0.7,
-      minTrackingConfidence: 0.5
-    });
+      hands.setOptions({
+        maxNumHands: 1,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.5
+      });
 
-    hands.onResults(onResults);
-    handsRef.current = hands;
+      hands.onResults(onResults);
+      handsRef.current = hands;
 
-    const interval = setInterval(() => {
-      if (webcamRef.current && webcamRef.current.video && handsRef.current) {
-        handsRef.current.send({ image: webcamRef.current.video });
-      }
-    }, 50);
+      const interval = setInterval(() => {
+        if (webcamRef.current && webcamRef.current.video && handsRef.current) {
+          handsRef.current.send({ image: webcamRef.current.video });
+        }
+      }, 50);
+
+      return interval;
+    };
+
+    let intervalId: any;
+    initHands().then(id => intervalId = id);
 
     return () => {
-      clearInterval(interval);
-      hands.close();
+      if (intervalId) clearInterval(intervalId);
+      if (hands) hands.close();
     };
   }, []);
 
-  const onResults = (results: Results) => {
+  const onResults = async (results: any) => {
     if (!canvasRef.current || !offscreenCanvasRef.current) return;
     const canvasCtx = canvasRef.current.getContext('2d');
     const offscreenCtx = offscreenCanvasRef.current.getContext('2d');
@@ -100,12 +109,15 @@ export default function AirWriting() {
     
     // Optional: Draw landmarks for feedback
     if (results.multiHandLandmarks) {
+      const drawingUtils = await import('@mediapipe/drawing_utils');
+      const mpHands = await import('@mediapipe/hands');
       for (const landmarks of results.multiHandLandmarks) {
-        drawingUtils.drawConnectors(canvasCtx, landmarks, Hands.HAND_CONNECTIONS, {color: '#7d33ff', lineWidth: 2});
+        drawingUtils.drawConnectors(canvasCtx, landmarks, mpHands.HAND_CONNECTIONS, {color: '#7d33ff', lineWidth: 2});
         drawingUtils.drawLandmarks(canvasCtx, landmarks, {color: '#00f2fe', lineWidth: 1, radius: 2});
       }
     }
   };
+
 
   const resetCanvas = () => {
     if (offscreenCanvasRef.current) {
