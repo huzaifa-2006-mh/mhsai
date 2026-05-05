@@ -16,32 +16,39 @@ export default function AirWriting() {
     let hands: any;
     
     const initHands = async () => {
-      // @ts-ignore
-      const mpHands = await import('@mediapipe/hands');
-      hands = new mpHands.Hands({
-        locateFile: (file) => {
-          return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-        }
-      });
+      try {
+        // @ts-ignore
+        const mpHands = await import('@mediapipe/hands');
+        hands = new mpHands.Hands({
+          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+        });
 
-      hands.setOptions({
-        maxNumHands: 1,
-        modelComplexity: 1,
-        minDetectionConfidence: 0.7,
-        minTrackingConfidence: 0.5
-      });
+        hands.setOptions({
+          maxNumHands: 1,
+          modelComplexity: 1,
+          minDetectionConfidence: 0.7,
+          minTrackingConfidence: 0.5
+        });
 
-      hands.onResults(onResults);
-      handsRef.current = hands;
+        hands.onResults(onResults);
+        handsRef.current = hands;
+        console.log(">>> MediaPipe Hands initialized");
 
-      const interval = setInterval(() => {
-        if (webcamRef.current && webcamRef.current.video && handsRef.current) {
-          handsRef.current.send({ image: webcamRef.current.video });
-        }
-      }, 50);
+        const interval = setInterval(() => {
+          if (webcamRef.current && webcamRef.current.video && handsRef.current) {
+            const video = webcamRef.current.video;
+            if (video.readyState >= 2) { // HAVE_CURRENT_DATA
+              handsRef.current.send({ image: video }).catch(err => console.error("MediaPipe Error:", err));
+            }
+          }
+        }, 100);
 
-      return interval;
+        return interval;
+      } catch (error) {
+        console.error("Failed to init MediaPipe:", error);
+      }
     };
+
 
     let intervalId: any;
     initHands().then(id => intervalId = id);

@@ -35,26 +35,31 @@ export default function AgeDetection() {
     if (!isModelsLoaded) return;
 
     const interval = setInterval(async () => {
-      if (webcamRef.current && webcamRef.current.video) {
-        const video = webcamRef.current.video;
-        const faceapi = await import('@vladmandic/face-api');
-        const detections = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
-          .withFaceLandmarks()
-          .withAgeAndGender();
+      try {
+        if (webcamRef.current && webcamRef.current.video) {
+          const video = webcamRef.current.video;
+          if (video.readyState >= 2) {
+            const faceapi = await import('@vladmandic/face-api');
+            const detections = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+              .withFaceLandmarks()
+              .withAgeAndGender();
 
-        if (detections) {
-          const roundedAge = Math.round(detections.age);
-          setResult({
-            age: roundedAge,
-            gender: detections.gender,
-            confidence: detections.detection.score
-          });
-          
-          // Log detection if it's new or stable
-          if (logs.length === 0 || Math.abs(logs[0].timestamp - Date.now()) > 3000) {
-             setLogs(prev => [{timestamp: Date.now(), value: `Detected ${detections.gender} (~${roundedAge}y)`}, ...prev].slice(0, 10));
+            if (detections) {
+              const roundedAge = Math.round(detections.age);
+              setResult({
+                age: roundedAge,
+                gender: detections.gender,
+                confidence: detections.detection.score
+              });
+              
+              if (logs.length === 0 || Math.abs(logs[0].timestamp - Date.now()) > 3000) {
+                 setLogs(prev => [{timestamp: Date.now(), value: `Detected ${detections.gender} (~${roundedAge}y)`}, ...prev].slice(0, 10));
+              }
+            }
           }
         }
+      } catch (error) {
+        console.error("Age detection error:", error);
       }
     }, 500);
 
