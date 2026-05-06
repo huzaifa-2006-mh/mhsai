@@ -112,24 +112,19 @@ export default function AirWriting() {
       setStatus("Tracking Hand");
       const landmarks = results.multiHandLandmarks[0];
       
-      // Index finger tip (8) and index finger base (5)
       const indexTip = landmarks[8];
       const indexDip = landmarks[7];
       const middleTip = landmarks[12];
       
-      // Coordinate mapping (with mirroring)
       const x = (1 - indexTip.x) * canvas.width;
       const y = indexTip.y * canvas.height;
 
-      // Gesture Logic: Index finger extended AND higher than other fingers
-      // Simpler check: index tip is significantly above index dip
       const isWriting = indexTip.y < indexDip.y && indexTip.y < middleTip.y;
 
       if (isWriting) {
         if (!lastPointRef.current) {
           setLogs(prev => [{timestamp: Date.now(), value: "Started Writing"}, ...prev].slice(0, 10));
         } else {
-          // Draw line segment on persistent ink canvas
           inkCtx.beginPath();
           inkCtx.moveTo(lastPointRef.current.x, lastPointRef.current.y);
           inkCtx.lineTo(x, y);
@@ -137,7 +132,6 @@ export default function AirWriting() {
         }
         lastPointRef.current = { x, y };
 
-        // Draw "pen" cursor
         ctx.beginPath();
         ctx.arc(x, y, 6, 0, Math.PI * 2);
         ctx.fillStyle = '#ffffff';
@@ -152,17 +146,24 @@ export default function AirWriting() {
         lastPointRef.current = null;
       }
 
-      // Draw hand skeleton (optional but good for user confidence)
-      try {
-        const drawingUtils = await import('@mediapipe/drawing_utils');
-        const mpHands = await import('@mediapipe/hands');
-        const connections = mpHands.HAND_CONNECTIONS || (mpHands.default && mpHands.default.HAND_CONNECTIONS);
-        
-        if (drawingUtils && connections) {
-          drawingUtils.drawConnectors(ctx, landmarks, connections, {color: 'rgba(125, 51, 255, 0.4)', lineWidth: 2});
-          drawingUtils.drawLandmarks(ctx, landmarks, {color: '#00f2fe', lineWidth: 1, radius: 2});
+      // Draw hand skeleton using global MediaPipe utils
+      // @ts-ignore
+      const drawingUtils = window.DrawingUtils || (window.mpHandsUtils);
+      // @ts-ignore
+      const mpHands = window.Hands;
+      
+      if (landmarks) {
+        // Fallback to manual drawing if utils fail, or use direct references
+        ctx.strokeStyle = 'rgba(125, 51, 255, 0.4)';
+        ctx.lineWidth = 2;
+        // Simple landmark dots
+        for (const landmark of landmarks) {
+          ctx.beginPath();
+          ctx.arc((1 - landmark.x) * canvas.width, landmark.y * canvas.height, 2, 0, Math.PI * 2);
+          ctx.fillStyle = '#00f2fe';
+          ctx.fill();
         }
-      } catch (e) {}
+      }
     } else {
       setStatus("Scanning for hand...");
       lastPointRef.current = null;

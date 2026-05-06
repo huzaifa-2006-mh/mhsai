@@ -21,11 +21,14 @@ export default function AgeDetection() {
   const ageBufferRef = useRef<number[]>([]);
   const genderBufferRef = useRef<string[]>([]);
 
+  const faceapiRef = useRef<any>(null);
+
   useEffect(() => {
     const loadModels = async () => {
       try {
         setStatus("Loading High-Accuracy Models...");
         const faceapi = await import('@vladmandic/face-api');
+        faceapiRef.current = faceapi;
         
         await Promise.all([
           faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
@@ -62,14 +65,14 @@ export default function AgeDetection() {
   };
 
   useEffect(() => {
-    if (!isModelsLoaded) return;
+    if (!isModelsLoaded || !faceapiRef.current) return;
 
     const interval = setInterval(async () => {
       try {
         if (webcamRef.current && webcamRef.current.video) {
           const video = webcamRef.current.video;
           if (video.readyState >= 2) {
-            const faceapi = await import('@vladmandic/face-api');
+            const faceapi = faceapiRef.current;
             // Using SsdMobilenetv1 for much better accuracy than TinyFaceDetector
             const detections = await faceapi.detectSingleFace(video, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
               .withFaceLandmarks()
